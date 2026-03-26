@@ -5,6 +5,9 @@ import 'dotenv/config';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const BEAT = process.env.AIBTC_BEAT || 'web3-gaming-infra';
+const WALLET_NAME = process.env.AIBTC_WALLET_NAME || 'agent007';
+const WALLET_PASS = process.env.AIBTC_WALLET_PASSWORD || 'PulseAgent007Secure';
+const MNEMONIC = process.env.CLIENT_MNEMONIC || '';
 
 let mcp: Client;
 
@@ -161,13 +164,47 @@ async function main() {
     // Wait for MCP server to fully initialize
     await new Promise(r => setTimeout(r, 2000));
 
-    // Verify wallet is loaded via CLIENT_MNEMONIC
+    // Verify Stacks wallet is loaded via CLIENT_MNEMONIC
     const ready = await checkWalletReady();
     if (!ready) {
         console.error("❌ FATAL: No wallet loaded. Set CLIENT_MNEMONIC env var on Railway.");
         process.exit(1);
     }
-    console.log("✅ Wallet ready!");
+    console.log("✅ Stacks L2 wallet ready!");
+
+    // Import + unlock wallet to enable Bitcoin L1 key derivation
+    console.log("Importing wallet for Bitcoin L1 signing...");
+    try {
+        const importResult = await mcp.callTool({
+            name: "wallet_import",
+            arguments: {
+                name: WALLET_NAME,
+                password: WALLET_PASS,
+                mnemonic: MNEMONIC
+            }
+        });
+        console.log("Import result:", extractText(importResult).substring(0, 200));
+    } catch (e) {
+        console.log("Import note (may already exist):", e);
+    }
+
+    // Unlock the imported wallet to derive BTC keys
+    console.log("Unlocking wallet for BTC key derivation...");
+    try {
+        const unlockResult = await mcp.callTool({
+            name: "wallet_unlock",
+            arguments: { name: WALLET_NAME, password: WALLET_PASS }
+        });
+        console.log("Unlock result:", extractText(unlockResult).substring(0, 200));
+        // Wait for key derivation to complete
+        await new Promise(r => setTimeout(r, 2000));
+    } catch (e) {
+        console.error("Unlock failed:", e);
+    }
+
+    // Verify BTC is now available
+    const info2 = await mcp.callTool({ name: "get_wallet_info", arguments: {} });
+    console.log("Post-unlock wallet info:", extractText(info2));
 
     // Claim beat
     try {
