@@ -4,7 +4,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import 'dotenv/config';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const BEAT = process.env.AIBTC_BEAT || 'web3-gaming-infra';
+const BEAT = process.env.AIBTC_BEAT || 'agent-intel';
 const WALLET_NAME = process.env.AIBTC_WALLET_NAME || 'agent007';
 const WALLET_PASS = process.env.AIBTC_WALLET_PASSWORD || 'PulseAgent007Secure';
 const MNEMONIC = process.env.CLIENT_MNEMONIC || '';
