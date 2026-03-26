@@ -8,43 +8,32 @@ const WALLET_NAME = process.env.AIBTC_WALLET_NAME || 'agent007';
 const WALLET_PASS = process.env.AIBTC_WALLET_PASSWORD || '';
 const BEAT = process.env.AIBTC_BEAT || 'web3-gaming-infra';
 
-let coreMcp: Client;
-let newsMcp: Client;
+let aibtcMcp: Client;
 let btcAddress = "";
 
 async function startMcpConnections() {
-    console.log("Starting MCP connections...");
+    console.log("Starting MCP connection...");
 
-    // Core MCP (Wallet & Heartbeat)
-    const coreTransport = new StdioClientTransport({
+    const transport = new StdioClientTransport({
         command: process.platform === 'win32' ? 'npx.cmd' : 'npx',
         args: ['-y', '@aibtc/mcp-server@latest'],
         env: { ...process.env, NETWORK: 'mainnet' }
     });
-    coreMcp = new Client({ name: "worker-core", version: "1.0" }, { capabilities: {} });
-    await coreMcp.connect(coreTransport);
-
-    // News MCP (Filing Signals)
-    const newsTransport = new StdioClientTransport({
-        command: process.platform === 'win32' ? 'npx.cmd' : 'npx',
-        args: ['-y', '@aibtcdev/mcp-server-news@latest'],
-        env: { ...process.env, WALLET_NAME, WALLET_PASSWORD: WALLET_PASS }
-    });
-    newsMcp = new Client({ name: "worker-news", version: "1.0" }, { capabilities: {} });
-    await newsMcp.connect(newsTransport);
+    aibtcMcp = new Client({ name: "aibtc-news-worker", version: "1.0" }, { capabilities: {} });
+    await aibtcMcp.connect(transport);
 
     console.log("MCP Connected.");
 
-    // Unlock wallet via Core MCP
+    // Unlock wallet via AIBTC MCP
     console.log("Unlocking wallet...");
     try {
-        await coreMcp.callTool({
+        await aibtcMcp.callTool({
             name: "wallet_unlock",
             arguments: { name: WALLET_NAME, password: WALLET_PASS }
         });
 
         // Get wallet info to cache the BTC address for heartbeats
-        const walletInfo = await coreMcp.callTool({
+        const walletInfo = await aibtcMcp.callTool({
             name: "get_wallet_info",
             arguments: {}
         }) as any;
@@ -65,7 +54,7 @@ async function heartbeat() {
         const timestamp = new Date().toISOString();
         const msg = `AIBTC Check-In | ${timestamp}`;
 
-        const signResult = await coreMcp.callTool({
+        const signResult = await aibtcMcp.callTool({
             name: "btc_sign_message",
             arguments: { message: msg }
         }) as any;
@@ -124,7 +113,7 @@ News Data: ${newsText}`;
 
         console.log("Generated Signal:", signalData.headline);
 
-        const fileResult = await newsMcp.callTool({
+        const fileResult = await aibtcMcp.callTool({
             name: "news_file_signal",
             arguments: {
                 btc_address: btcAddress,
@@ -148,7 +137,7 @@ async function main() {
     // Claim the beat first
     try {
         console.log(`Claiming beat ${BEAT}...`);
-        await newsMcp.callTool({
+        await aibtcMcp.callTool({
             name: "news_claim_beat",
             arguments: {
                 btc_address: btcAddress,
