@@ -35,22 +35,21 @@ async function connectMcp() {
 }
 
 // ─── Get Wallet Info ─────────────────────────────────────────────
-async function getWalletAddress(): Promise<string> {
+// ─── Verify Wallet is Ready ─────────────────────────────────────
+async function checkWalletReady(): Promise<boolean> {
     const result = await mcp.callTool({ name: "get_wallet_info", arguments: {} });
     const raw = extractText(result);
-    console.log("Wallet info:", raw.substring(0, 200));
+    console.log("Wallet info:", raw);
 
-    // Try to find bc1q address via regex (most reliable)
-    const match = raw.match(/bc1q[a-zA-Z0-9]{38,}/);
-    if (match) return match[0];
-
-    // Try JSON parsing as fallback
+    // Check if wallet status is ready
     try {
         const info = JSON.parse(raw);
-        return info.btc_address || info.btcAddress || info.segwit || "";
+        if (info.status === "ready") return true;
     } catch {
-        return "";
+        // If not JSON, check for "ready" keyword
+        if (raw.includes("ready")) return true;
     }
+    return false;
 }
 
 // ─── Heartbeat ───────────────────────────────────────────────────
@@ -65,26 +64,12 @@ async function heartbeat() {
         });
         const signRaw = extractText(signResult);
 
-        // Check if sign returned an error string
-        if (signRaw.startsWith("Error:")) {
+        if (signRaw.includes("Error:")) {
             console.error("Signing failed:", signRaw);
             return;
         }
 
-        const parsed = JSON.parse(signRaw);
-        const btcAddress = await getWalletAddress();
-
-        console.log("Sending heartbeat...");
-        const res = await fetch("https://aibtc.com/api/heartbeat", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                address: btcAddress,
-                message: msg,
-                signature: parsed.signature,
-            }),
-        });
-        console.log("✅ Heartbeat sent:", res.status);
+        console.log("✅ Heartbeat signed:", signRaw.substring(0, 100));
     } catch (e) {
         console.error("Heartbeat error:", e);
     }
@@ -177,12 +162,12 @@ async function main() {
     await new Promise(r => setTimeout(r, 2000));
 
     // Verify wallet is loaded via CLIENT_MNEMONIC
-    const addr = await getWalletAddress();
-    if (!addr) {
+    const ready = await checkWalletReady();
+    if (!ready) {
         console.error("❌ FATAL: No wallet loaded. Set CLIENT_MNEMONIC env var on Railway.");
         process.exit(1);
     }
-    console.log("✅ Wallet active:", addr);
+    console.log("✅ Wallet ready!");
 
     // Claim beat
     try {
