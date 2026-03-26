@@ -112,7 +112,7 @@ News Data: ${newsText}`;
 
         console.log("Asking Claude 3.5 Sonnet to format the news via Anthropics API...");
         const msg = await anthropic.messages.create({
-            model: "claude-3-5-sonnet-latest",
+            model: "claude-3-5-sonnet-20241022",
             max_tokens: 300,
             temperature: 0,
             system: "Output only raw JSON without code blocks.",
@@ -146,7 +146,14 @@ async function main() {
     console.log("🚀 Booting AIBTC News Worker...");
     await startMcpConnections();
 
-    // Claim the beat first
+    // Initial Run - SEQUENTIAL
+    // 1. Wait a bit for MCP server to fully initialize its internal state
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    // 2. Heartbeat (Already handles unlock internal check)
+    await heartbeat();
+
+    // 3. Claim the beat
     try {
         console.log(`Claiming beat ${BEAT}...`);
         await aibtcMcp.callTool({
@@ -159,10 +166,11 @@ async function main() {
             }
         });
         console.log(`Beat claimed.`);
-    } catch (e) { console.log("Beat likely already claimed or returned a warning."); }
+    } catch (e) {
+        console.log("Beat likely already claimed or returned a warning.");
+    }
 
-    // Initial Run
-    await heartbeat();
+    // 4. File first signal
     await fetchNewsAndFileSignal();
 
     console.log("⏱️ Worker is now actively polling. Heartbeat: 5m, News Signal: 4h.");
