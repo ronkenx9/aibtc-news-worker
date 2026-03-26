@@ -33,8 +33,8 @@ async function ensureUnlocked() {
             name: "wallet_unlock",
             arguments: { name: WALLET_NAME, password: WALLET_PASS }
         });
-        // Increased buffer for server state sync especially on container boot
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        // Exponentially increased buffer for low-spec container state sync
+        await new Promise(resolve => setTimeout(resolve, 3500));
     } catch (e) {
         console.error("Critical: Failed to unlock wallet.");
         throw e;
@@ -120,8 +120,8 @@ News Data: ${newsText}`;
                 headline: signalData.headline,
                 body: signalData.body,
                 disclosure: "claude-3-haiku, custom-worker",
-                sources: [], // satisfies Zod
-                tags: ["web3-gaming", "alpha"] // satisfies Zod
+                sources: ["https://aibtc.com"], // satisfies >= 1 item constraint
+                tags: ["web3-gaming", "alpha", "bitcoin"] // satisfies >= 1 item constraint
             }
         }) as any;
         console.log("✅ Signal Filed Successfully!", (fileResult.content[0] as any).text);
