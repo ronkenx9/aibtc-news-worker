@@ -41,7 +41,13 @@ async function startMcpConnections() {
             ? walletInfo.content[0].text
             : JSON.stringify(walletInfo.content[0]);
 
-        const parsedInfo = JSON.parse(infoText) as any;
+        let parsedInfo: any;
+        try {
+            parsedInfo = JSON.parse(infoText);
+        } catch (e) {
+            console.error("Failed to parse wallet info JSON. Raw text:", infoText);
+            throw e;
+        }
         btcAddress = parsedInfo.btc_address || parsedInfo.btcAddress || "";
         console.log("Wallet unlocked. BTC Address:", btcAddress);
     } catch (e) {
@@ -62,7 +68,13 @@ async function heartbeat() {
         const signText = typeof signResult.content[0] === 'object' && 'text' in signResult.content[0]
             ? signResult.content[0].text
             : JSON.stringify(signResult.content[0]);
-        const parsedSign = JSON.parse(signText) as any;
+        let parsedSign: any;
+        try {
+            parsedSign = JSON.parse(signText);
+        } catch (e) {
+            console.error("Failed to parse signature JSON. Raw text:", signText);
+            throw e;
+        }
 
         console.log("Sending heartbeat to AIBTC...");
         const res = await fetch("https://aibtc.com/api/heartbeat", {
@@ -98,9 +110,9 @@ Respond with ONLY a valid JSON object matching exactly:
 
 News Data: ${newsText}`;
 
-        console.log("Asking Claude 3.5 Haiku to format the news via Anthropics API...");
+        console.log("Asking Claude 3.5 Sonnet to format the news via Anthropics API...");
         const msg = await anthropic.messages.create({
-            model: "claude-3-5-haiku-latest",
+            model: "claude-3-5-sonnet-latest",
             max_tokens: 300,
             temperature: 0,
             system: "Output only raw JSON without code blocks.",
