@@ -116,9 +116,9 @@ Respond with ONLY a valid JSON object matching exactly:
 
 News Data: ${newsText}`;
 
-        console.log("Asking Claude 3.5 Sonnet to format the news via Anthropics API...");
+        console.log("Asking Claude 3 Haiku to format the news via Anthropics API...");
         const msg = await anthropic.messages.create({
-            model: "claude-3-5-sonnet-20241022",
+            model: "claude-3-haiku-20240307",
             max_tokens: 300,
             temperature: 0,
             system: "Output only raw JSON without code blocks.",
