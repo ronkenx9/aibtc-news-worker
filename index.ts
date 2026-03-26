@@ -27,7 +27,7 @@ async function startMcpConnections() {
     // News MCP (Filing Signals)
     const newsTransport = new StdioClientTransport({
         command: process.platform === 'win32' ? 'npx.cmd' : 'npx',
-        args: ['-y', '@aibtcdev/aibtc-news-mcp@latest'],
+        args: ['-y', '@aibtcdev/mcp-server-news@latest'],
         env: { ...process.env, WALLET_NAME, WALLET_PASSWORD: WALLET_PASS }
     });
     newsMcp = new Client({ name: "worker-news", version: "1.0" }, { capabilities: {} });

@@ -1,4 +1,4 @@
-FROM node:20-slim
+FROM node:22-slim
 
 # Install system dependencies for node-canvas or other crypto tool needs
 RUN apt-get update && apt-get install -y \
