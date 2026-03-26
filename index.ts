@@ -60,6 +60,12 @@ async function heartbeat() {
         const timestamp = new Date().toISOString();
         const msg = `AIBTC Check-In | ${timestamp}`;
 
+        // Production Guard: Ensure wallet is decrypted before signing
+        await aibtcMcp.callTool({
+            name: "wallet_unlock",
+            arguments: { name: WALLET_NAME, password: WALLET_PASS }
+        });
+
         const signResult = await aibtcMcp.callTool({
             name: "btc_sign_message",
             arguments: { message: msg }
