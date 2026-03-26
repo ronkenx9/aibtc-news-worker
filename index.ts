@@ -23,48 +23,29 @@ async function startMcpConnections() {
     await aibtcMcp.connect(transport);
 
     console.log("MCP Connected.");
+}
 
-    // Unlock wallet via AIBTC MCP
-    console.log("Unlocking wallet...");
+// Helper to ensure wallet is unlocked before any sensitive tool call
+async function ensureUnlocked() {
+    console.log("Ensuring wallet is unlocked...");
     try {
         await aibtcMcp.callTool({
             name: "wallet_unlock",
             arguments: { name: WALLET_NAME, password: WALLET_PASS }
         });
-
-        // Get wallet info to cache the BTC address for heartbeats
-        const walletInfo = await aibtcMcp.callTool({
-            name: "get_wallet_info",
-            arguments: {}
-        }) as any;
-        const infoText = typeof walletInfo.content[0] === 'object' && 'text' in walletInfo.content[0]
-            ? walletInfo.content[0].text
-            : JSON.stringify(walletInfo.content[0]);
-
-        let parsedInfo: any;
-        try {
-            parsedInfo = JSON.parse(infoText);
-        } catch (e) {
-            console.error("Failed to parse wallet info JSON. Raw text:", infoText);
-            throw e;
-        }
-        btcAddress = parsedInfo.btc_address || parsedInfo.btcAddress || "";
-        console.log("Wallet unlocked. BTC Address:", btcAddress);
+        // Wait a small buffer for server state sync
+        await new Promise(resolve => setTimeout(resolve, 1000));
     } catch (e) {
-        console.error("Error unlocking wallet (may already be unlocked):", e);
+        console.error("Critical: Failed to unlock wallet.");
+        throw e;
     }
 }
 
 async function heartbeat() {
     try {
+        await ensureUnlocked();
         const timestamp = new Date().toISOString();
         const msg = `AIBTC Check-In | ${timestamp}`;
-
-        // Production Guard: Ensure wallet is decrypted before signing
-        await aibtcMcp.callTool({
-            name: "wallet_unlock",
-            arguments: { name: WALLET_NAME, password: WALLET_PASS }
-        });
 
         const signResult = await aibtcMcp.callTool({
             name: "btc_sign_message",
@@ -129,7 +110,7 @@ News Data: ${newsText}`;
         const responseText = msg.content[0].text;
         const signalData = JSON.parse(responseText);
 
-        console.log("Generated Signal:", signalData.headline);
+        console.log("Generated Technical Alpha:", signalData.headline);
 
         const fileResult = await aibtcMcp.callTool({
             name: "news_file_signal",
@@ -138,7 +119,8 @@ News Data: ${newsText}`;
                 beat_slug: BEAT,
                 headline: signalData.headline,
                 body: signalData.body,
-                disclosure: "claude-3-5-haiku-latest, custom-typescript-worker"
+                disclosure: "claude-3-haiku, custom-worker",
+                sources: [] // Always provide an array to satisfy Zod
             }
         }) as any;
         console.log("✅ Signal Filed Successfully!", (fileResult.content[0] as any).text);
@@ -156,7 +138,26 @@ async function main() {
     // 1. Wait a bit for MCP server to fully initialize its internal state
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    // 2. Heartbeat (Already handles unlock internal check)
+    // 2. Fetch BTC address (needs unlock)
+    try {
+        await ensureUnlocked();
+        const walletInfo = await aibtcMcp.callTool({
+            name: "get_wallet_info",
+            arguments: {}
+        }) as any;
+
+        const infoText = typeof walletInfo.content[0] === 'object' && 'text' in walletInfo.content[0]
+            ? walletInfo.content[0].text
+            : JSON.stringify(walletInfo.content[0]);
+
+        const parsedInfo = JSON.parse(infoText);
+        btcAddress = parsedInfo.btc_address || parsedInfo.btcAddress || "";
+        console.log("BTC Address cached:", btcAddress);
+    } catch (e) {
+        console.error("Identity fetch failed during boot.");
+    }
+
+    // 3. Initial Heartbeat
     await heartbeat();
 
     // 3. Claim the beat
