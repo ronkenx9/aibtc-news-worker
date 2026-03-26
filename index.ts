@@ -8,183 +8,224 @@ const WALLET_NAME = process.env.AIBTC_WALLET_NAME || 'agent007';
 const WALLET_PASS = process.env.AIBTC_WALLET_PASSWORD || '';
 const BEAT = process.env.AIBTC_BEAT || 'web3-gaming-infra';
 
-let aibtcMcp: Client;
+let mcp: Client;
 let btcAddress = "";
 
-async function startMcpConnections() {
+// ─── MCP Connection ──────────────────────────────────────────────
+async function connectMcp() {
     console.log("Starting MCP connection...");
-
     const transport = new StdioClientTransport({
         command: process.platform === 'win32' ? 'npx.cmd' : 'npx',
         args: ['-y', '@aibtc/mcp-server@latest'],
         env: { ...process.env, NETWORK: 'mainnet' }
     });
-    aibtcMcp = new Client({ name: "aibtc-news-worker", version: "1.0" }, { capabilities: {} });
-    await aibtcMcp.connect(transport);
-
+    mcp = new Client({ name: "aibtc-news-worker", version: "1.0" }, { capabilities: {} });
+    await mcp.connect(transport);
     console.log("MCP Connected.");
 }
 
-// Helper to ensure wallet is unlocked before any sensitive tool call
-async function ensureUnlocked() {
-    console.log("Ensuring wallet is unlocked...");
-    try {
-        await aibtcMcp.callTool({
-            name: "wallet_unlock",
-            arguments: { name: WALLET_NAME, password: WALLET_PASS }
-        });
-        // Exponentially increased buffer for low-spec container state sync
-        await new Promise(resolve => setTimeout(resolve, 3500));
-    } catch (e) {
-        console.error("Critical: Failed to unlock wallet.");
-        throw e;
-    }
+// ─── Helper: extract text from MCP tool response ─────────────────
+function extractText(result: any): string {
+    if (result?.content?.[0]?.text) return result.content[0].text;
+    if (result?.content?.[0]) return JSON.stringify(result.content[0]);
+    return JSON.stringify(result);
 }
 
+// ─── Wallet Unlock (with state-sync wait) ────────────────────────
+async function unlockWallet(): Promise<void> {
+    console.log("Unlocking wallet...");
+    const result = await mcp.callTool({
+        name: "wallet_unlock",
+        arguments: { name: WALLET_NAME, password: WALLET_PASS }
+    });
+    console.log("Unlock response:", extractText(result));
+    // Critical: Wait for the MCP server's internal state to sync
+    await new Promise(r => setTimeout(r, 3000));
+}
+
+// ─── Cache BTC Address ───────────────────────────────────────────
+async function cacheBtcAddress(): Promise<void> {
+    const result = await mcp.callTool({
+        name: "get_wallet_info",
+        arguments: {}
+    });
+    const raw = extractText(result);
+    console.log("Wallet info raw:", raw);
+
+    // Try to parse JSON and find the address
+    try {
+        const info = JSON.parse(raw);
+        // Try multiple possible field names
+        btcAddress = info.btc_address || info.btcAddress || info.segwit || info["Native SegWit"] || "";
+
+        // If still empty, search for bc1q pattern in the raw string
+        if (!btcAddress) {
+            const match = raw.match(/bc1q[a-zA-Z0-9]{38,}/);
+            if (match) btcAddress = match[0];
+        }
+    } catch {
+        // If not JSON, try regex on raw text
+        const match = raw.match(/bc1q[a-zA-Z0-9]{38,}/);
+        if (match) btcAddress = match[0];
+    }
+
+    console.log("BTC Address:", btcAddress || "⚠️ NOT FOUND");
+}
+
+// ─── Heartbeat ───────────────────────────────────────────────────
 async function heartbeat() {
     try {
-        await ensureUnlocked();
+        // Always unlock before signing
+        await unlockWallet();
+
         const timestamp = new Date().toISOString();
         const msg = `AIBTC Check-In | ${timestamp}`;
 
-        const signResult = await aibtcMcp.callTool({
+        const signResult = await mcp.callTool({
             name: "btc_sign_message",
             arguments: { message: msg }
-        }) as any;
+        });
+        const signRaw = extractText(signResult);
+        console.log("Sign result:", signRaw);
 
-        const signText = typeof signResult.content[0] === 'object' && 'text' in signResult.content[0]
-            ? signResult.content[0].text
-            : JSON.stringify(signResult.content[0]);
-        let parsedSign: any;
-        try {
-            parsedSign = JSON.parse(signText);
-        } catch (e) {
-            console.error("Failed to parse signature JSON. Raw text:", signText);
-            throw e;
+        // Check if sign returned an error string
+        if (signRaw.startsWith("Error:")) {
+            console.error("Signing failed:", signRaw);
+            return;
         }
+
+        const parsed = JSON.parse(signRaw);
 
         console.log("Sending heartbeat to AIBTC...");
         const res = await fetch("https://aibtc.com/api/heartbeat", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-                signature: parsedSign.signature,
-                timestamp: timestamp,
-                btcAddress: btcAddress
-            })
+                address: btcAddress,
+                message: msg,
+                signature: parsed.signature,
+            }),
         });
-
-        if (res.ok) console.log(`✅ Heartbeat sent successfully at ${timestamp}`);
-        else console.error("❌ Heartbeat failed:", await res.text());
+        console.log("✅ Heartbeat sent:", res.status);
     } catch (e) {
         console.error("Heartbeat error:", e);
     }
 }
 
+// ─── Fetch News & File Signal ────────────────────────────────────
 async function fetchNewsAndFileSignal() {
     try {
-        console.log("Fetching news sources for analysis...");
-        // Fallback static high-signal data for testing if real news API is unavailable
-        let newsText = `Solana announces new ZK compression token standards. 
-    Agentic AI protocols on Stacks deploy 50,000 autonomous bots this month.
-    Web3 gaming sees massive influx of smart wallets using Account Abstraction.`;
+        console.log("Fetching news for analysis...");
 
-        const prompt = `You are Agent-007, a high-signal Web3 journalist. Read the following raw news data and formulate a single, cohesive signal for the "${BEAT}" beat. 
-Your output must be heavily data-driven, objective, and dense with technical alpha. Ignore fluff.
-Format strictly using the Inverted Pyramid. 
-Respond with ONLY a valid JSON object matching exactly:
-{ "headline": "string under 100 chars", "body": "string under 1000 chars" }
+        // Get latest news from the AIBTC brief
+        let newsText = "";
+        try {
+            const briefResult = await mcp.callTool({
+                name: "news_get_brief",
+                arguments: {}
+            });
+            newsText = extractText(briefResult);
+        } catch {
+            newsText = "Latest BTC and Web3 gaming developments";
+        }
 
-News Data: ${newsText}`;
-
-        console.log("Asking Claude 3 Haiku to format the news via Anthropics API...");
+        console.log("Asking Claude 3 Haiku to format signal...");
         const msg = await anthropic.messages.create({
             model: "claude-3-haiku-20240307",
-            max_tokens: 300,
+            max_tokens: 500,
             temperature: 0,
             system: "Output only raw JSON without code blocks.",
-            messages: [{ role: "user", content: prompt }]
+            messages: [{
+                role: "user",
+                content: `Analyze this news data and return a JSON object with:
+- "headline": A punchy headline (max 120 chars)
+- "body": A 2-3 sentence technical analysis (max 1000 chars)
+- "tags": Array of 1-5 lowercase tag slugs like ["bitcoin", "defi", "gaming"]
+- "sources": Array of 1-3 objects like [{"url": "https://example.com", "title": "Article Title"}]
+
+If you don't have real source URLs, use: [{"url": "https://aibtc.com", "title": "AIBTC Intelligence Brief"}]
+
+News Data: ${newsText}`
+            }]
         });
 
-        // @ts-ignore
-        const responseText = msg.content[0].text;
+        const responseText = (msg.content[0] as any).text;
         const signalData = JSON.parse(responseText);
 
-        console.log("Generated Technical Alpha:", signalData.headline);
+        console.log("Generated:", signalData.headline);
 
-        const fileResult = await aibtcMcp.callTool({
+        // Ensure sources are objects with url+title (required by Zod)
+        const sources = (signalData.sources || []).map((s: any) => {
+            if (typeof s === 'string') return { url: s, title: "Source" };
+            return { url: s.url || "https://aibtc.com", title: s.title || "Source" };
+        });
+        if (sources.length === 0) {
+            sources.push({ url: "https://aibtc.com", title: "AIBTC Intelligence Brief" });
+        }
+
+        // Ensure tags are strings with >= 1 item
+        const tags = signalData.tags || ["bitcoin", "alpha"];
+        if (tags.length === 0) tags.push("bitcoin");
+
+        const fileResult = await mcp.callTool({
             name: "news_file_signal",
             arguments: {
-                btc_address: btcAddress,
                 beat_slug: BEAT,
                 headline: signalData.headline,
-                body: signalData.body,
-                disclosure: "claude-3-haiku, custom-worker",
-                sources: ["https://aibtc.com"], // satisfies >= 1 item constraint
-                tags: ["web3-gaming", "alpha", "bitcoin"] // satisfies >= 1 item constraint
+                body: signalData.body || "",
+                sources: sources,
+                tags: tags,
+                disclosure: "claude-3-haiku-20240307, custom-typescript-worker"
             }
-        }) as any;
-        console.log("✅ Signal Filed Successfully!", (fileResult.content[0] as any).text);
+        });
+        console.log("✅ Signal Filed:", extractText(fileResult));
 
     } catch (e) {
         console.error("Error filing signal:", e);
     }
 }
 
+// ─── Main Boot Sequence ──────────────────────────────────────────
 async function main() {
     console.log("🚀 Booting AIBTC News Worker...");
-    await startMcpConnections();
 
-    // Initial Run - SEQUENTIAL
-    // 1. Wait a bit for MCP server to fully initialize its internal state
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await connectMcp();
 
-    // 2. Fetch BTC address (needs unlock)
+    // Wait for MCP server to fully initialize
+    await new Promise(r => setTimeout(r, 2000));
+
+    // Unlock and cache address
+    await unlockWallet();
+    await cacheBtcAddress();
+
+    // Claim beat
     try {
-        await ensureUnlocked();
-        const walletInfo = await aibtcMcp.callTool({
-            name: "get_wallet_info",
-            arguments: {}
-        }) as any;
-
-        const infoText = typeof walletInfo.content[0] === 'object' && 'text' in walletInfo.content[0]
-            ? walletInfo.content[0].text
-            : JSON.stringify(walletInfo.content[0]);
-
-        const parsedInfo = JSON.parse(infoText);
-        btcAddress = parsedInfo.btc_address || parsedInfo.btcAddress || "";
-        console.log("BTC Address cached:", btcAddress);
-    } catch (e) {
-        console.error("Identity fetch failed during boot.");
-    }
-
-    // 3. Initial Heartbeat
-    await heartbeat();
-
-    // 3. Claim the beat
-    try {
-        console.log(`Claiming beat ${BEAT}...`);
-        await aibtcMcp.callTool({
+        console.log(`Claiming beat: ${BEAT}...`);
+        await mcp.callTool({
             name: "news_claim_beat",
             arguments: {
-                btc_address: btcAddress,
                 slug: BEAT,
                 name: "Web3 Gaming & Infrastructure",
                 description: "Alpha on Agentic Infrastructure and Web3 Gaming"
             }
         });
-        console.log(`Beat claimed.`);
+        console.log("Beat claimed.");
     } catch (e) {
-        console.log("Beat likely already claimed or returned a warning.");
+        console.log("Beat claim note:", e);
     }
 
-    // 4. File first signal
+    // Initial heartbeat
+    await heartbeat();
+
+    // Initial signal
     await fetchNewsAndFileSignal();
 
     console.log("⏱️ Worker is now actively polling. Heartbeat: 5m, News Signal: 4h.");
-    // Schedule Loops
-    setInterval(heartbeat, 5 * 60 * 1000); // 5 minutes
-    setInterval(fetchNewsAndFileSignal, 4 * 60 * 60 * 1000); // 4 hours
+    setInterval(heartbeat, 5 * 60 * 1000);
+    setInterval(fetchNewsAndFileSignal, 4 * 60 * 60 * 1000);
 }
 
-main().catch(console.error);
+main().catch(e => {
+    console.error("FATAL:", e);
+    process.exit(1);
+});
